@@ -2,6 +2,8 @@ module github.com/mantlenetworkio/mantle/l2geth
 
 go 1.23.0
 
+toolchain go1.23.12
+
 replace github.com/mantlenetworkio/mantle/fraud-proof => ../fraud-proof
 
 replace github.com/mantlenetworkio/mantle/bss-core => ../bss-core
