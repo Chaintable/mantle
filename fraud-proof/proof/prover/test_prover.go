@@ -161,7 +161,7 @@ func (l *TestProver) CaptureTxStart(gasLimit uint64) {}
 
 func (l *TestProver) CaptureTxEnd(restGas uint64) {}
 
-func (l *TestProver) CaptureStart(env *vm.EVM, from common.Address, to common.Address, create bool, input []byte, gas uint64, value *big.Int) error {
+func (l *TestProver) CaptureStart(env *vm.EVM, from common.Address, to common.Address, create bool, input []byte, gas uint64, value *big.Int) {
 	l.env = env
 	l.counter = 1
 	if create {
@@ -202,19 +202,20 @@ func (l *TestProver) CaptureStart(env *vm.EVM, from common.Address, to common.Ad
 		InputSize: uintToHex(l.input.Size()),
 	}
 	log.Debug("Capture Start", "from", from, "to", to)
-	return nil
 }
 
-func (l *TestProver) CaptureState(env *vm.EVM, pc uint64, op vm.OpCode, gas, cost uint64, memory *vm.Memory, stack *vm.Stack, contract *vm.Contract, rData []byte, depth int, vmerr error) error {
+func (l *TestProver) CaptureState(pc uint64, op vm.OpCode, gas, cost uint64, scope *vm.ScopeContext, rData []byte, depth int, vmerr error) {
+	memory := scope.Memory
+	stack := scope.Stack
+	contract := scope.Contract
 	if l.done {
-		return vmerr
+		return
 	}
 
 	defer func() {
 		l.counter += 1
 	}()
 
-	// Construct the IntraState before the opcode execution
 	s := state.StateFromCaptured(
 		l.blockNumber,
 		l.transactionIdx,
@@ -237,15 +238,12 @@ func (l *TestProver) CaptureState(env *vm.EVM, pc uint64, op vm.OpCode, gas, cos
 	)
 
 	log.Debug("Generated state", "idx", l.counter, "hash", hexutil.Encode(s.Hash().Bytes()), "op", op)
-	// The target state is found, generate the one-step proof
 	if int64(l.counter-1) == l.step || int64(l.lastOpcode) == l.opcode {
 		l.done = true
 		if l.lastState == nil {
 			l.err = ErrStepIdxAndHashMismatch
-			return vmerr
+			return
 		}
-		// l.vmerr is the error of l.lastState, either before/during the opcode execution
-		// if l.vmerr is not nil, the current state s must be in the parent call frame of l.lastState
 		ctx := proof.NewProofGenContext(l.rules, l.env.Context.Coinbase, l.transaction, l.receipt, l.lastCode)
 		osp, err := proof.GetIntraProof(ctx, l.lastState, s, l.vmerr)
 		if err != nil {
@@ -264,22 +262,16 @@ func (l *TestProver) CaptureState(env *vm.EVM, pc uint64, op vm.OpCode, gas, cos
 			}
 			log.Debug("SHOW STATE", "length of lastState", len(l.lastState.Encode()))
 			log.Debug("SHOW STATE", "length of encoded", len(encoded))
-
 			log.Debug("SHOW STATE", "hash of lastState", l.lastState.Hash().String())
 			log.Debug("SHOW STATE", "hash of encoded", crypto.Keccak256Hash(encoded[:len(l.lastState.Encode())]).String())
 		}
-		return vmerr
+		return
 	}
 	l.lastState = s
 	l.lastCode = contract.Code
 	l.lastCost = cost
 	l.lastOpcode = byte(op)
-	// vmerr is not nil means the gas/stack validation failed, the opcode execution will
-	// not happen and the current call frame will be immediately reverted. This is the
-	// last CaptureState call for this call frame and there won't be any CaptureFault call.
-	// Otherwise, vmerr should be cleared.
 	l.vmerr = vmerr
-	return vmerr
 }
 
 func (l *TestProver) CaptureEnter(typ vm.OpCode, from common.Address, to common.Address, input []byte, gas uint64, value *big.Int) {
@@ -341,23 +333,18 @@ func (l *TestProver) CaptureExit(output []byte, gasUsed uint64, vmerr error) {
 		}
 	}
 }
-func (l *TestProver) CaptureFault(env *vm.EVM, pc uint64, op vm.OpCode, gas, cost uint64, memory *vm.Memory, stack *vm.Stack, contract *vm.Contract, depth int, vmerr error) error {
+func (l *TestProver) CaptureFault(pc uint64, op vm.OpCode, gas, cost uint64, scope *vm.ScopeContext, depth int, vmerr error) {
 	l.vmerr = vmerr
-	// The next CaptureState or CaptureEnd will handle the proof generation if needed
-	return vmerr
 }
 
-func (l *TestProver) CaptureEnd(output []byte, gasUsed uint64, t time.Duration, vmerr error) error {
+func (l *TestProver) CaptureEnd(output []byte, gasUsed uint64, t time.Duration, vmerr error) {
 	log.Debug("Capture End", "output", output)
 	if l.done {
-		// Something went wrong during tracing, exit early
-		return vmerr
+		return
 	}
 
 	if int64(l.counter-1) == l.step {
 		l.done = true
-		// If l.vmerr is not nil, the entire transaction execution will be reverted.
-		// Otherwise, the execution ended through STOP or RETURN opcode.
 		ctx := proof.NewProofGenContext(l.rules, l.env.Context.Coinbase, l.transaction, l.receipt, l.lastCode)
 		osp, err := proof.GetIntraProof(ctx, l.lastState, nil, l.vmerr)
 		if err != nil {
@@ -375,7 +362,6 @@ func (l *TestProver) CaptureEnd(output []byte, gasUsed uint64, t time.Duration, 
 			}
 		}
 	}
-	return vmerr
 }
 
 func (l *TestProver) GetResult() (json.RawMessage, error) {

@@ -36,6 +36,20 @@ import (
 	"golang.org/x/crypto/sha3"
 )
 
+type LogHook = func(log *types.Log)
+
+type StorageDiff struct {
+	Accounts map[common.Hash][]byte
+	Storage  map[common.Hash]map[common.Hash][]byte
+}
+
+type slimAccount struct {
+	Nonce    uint64
+	Balance  *big.Int
+	Root     common.Hash
+	CodeHash []byte
+}
+
 type revision struct {
 	id           int
 	journalIndex int
@@ -109,6 +123,10 @@ type StateDB struct {
 	validRevisions []revision
 	nextRevisionId int
 
+	// Debank hooks
+	OnLog       LogHook
+	storageDiff *StorageDiff
+
 	// Measurements gathered during execution for debugging purposes
 	AccountReads   time.Duration
 	AccountHashes  time.Duration
@@ -136,6 +154,10 @@ func New(root common.Hash, db Database) (*StateDB, error) {
 		preimages:           make(map[common.Hash][]byte),
 		journal:             newJournal(),
 		accessList:          newAccessList(),
+		storageDiff: &StorageDiff{
+			Accounts: make(map[common.Hash][]byte),
+			Storage:  make(map[common.Hash]map[common.Hash][]byte),
+		},
 	}, nil
 }
 
@@ -181,6 +203,10 @@ func (s *StateDB) AddLog(log *types.Log) {
 	log.Index = s.logSize
 	s.logs[s.thash] = append(s.logs[s.thash], log)
 	s.logSize++
+
+	if s.OnLog != nil {
+		s.OnLog(log)
+	}
 }
 
 func (s *StateDB) GetLogs(hash common.Hash) []*types.Log {
@@ -492,6 +518,18 @@ func (s *StateDB) updateStateObject(obj *stateObject) {
 		panic(fmt.Errorf("can't encode object at %x: %v", addr[:], err))
 	}
 	s.setError(s.trie.TryUpdate(addr[:], data))
+
+	if s.storageDiff != nil {
+		slimData, err := rlp.EncodeToBytes(slimAccount{
+			Nonce:    obj.data.Nonce,
+			Balance:  obj.data.Balance,
+			Root:     obj.data.Root,
+			CodeHash: obj.data.CodeHash,
+		})
+		if err == nil {
+			s.storageDiff.Accounts[obj.addrHash] = slimData
+		}
+	}
 }
 
 // deleteStateObject removes the given object from the state trie.
@@ -734,6 +772,10 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 		}
 		if obj.suicided || (deleteEmptyObjects && obj.empty()) {
 			obj.deleted = true
+			if s.storageDiff != nil {
+				delete(s.storageDiff.Accounts, obj.addrHash)
+				delete(s.storageDiff.Storage, obj.addrHash)
+			}
 		} else {
 			obj.finalise()
 		}
@@ -768,6 +810,27 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 		defer func(start time.Time) { s.AccountHashes += time.Since(start) }(time.Now())
 	}
 	return s.trie.Hash()
+}
+
+// Output returns the state diff collected during block execution.
+func (s *StateDB) Output() (map[common.Hash]struct{}, map[common.Hash][]byte, map[common.Hash]map[common.Hash][]byte, map[common.Hash][]byte) {
+	codes := make(map[common.Hash][]byte)
+	destructs := make(map[common.Hash]struct{})
+
+	for addr := range s.stateObjectsDirty {
+		if obj := s.stateObjects[addr]; obj != nil {
+			if obj.deleted {
+				destructs[obj.addrHash] = struct{}{}
+			} else if obj.code != nil && obj.dirtyCode {
+				codes[common.BytesToHash(obj.CodeHash())] = obj.code
+			}
+		}
+	}
+
+	if s.storageDiff == nil {
+		return destructs, nil, nil, codes
+	}
+	return destructs, s.storageDiff.Accounts, s.storageDiff.Storage, codes
 }
 
 // Prepare sets the current transaction hash and index and block hash which is

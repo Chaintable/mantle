@@ -516,8 +516,8 @@ func wrapError(context string, err error) error {
 	return fmt.Errorf("%v    in server-side tracer function '%v'", err, context)
 }
 
-// CaptureStart implements the Tracer interface to initialize the tracing operation.
-func (jst *Tracer) CaptureStart(env *vm.EVM, from common.Address, to common.Address, create bool, input []byte, gas uint64, value *big.Int) error {
+// CaptureStart implements the EVMLogger interface to initialize the tracing operation.
+func (jst *Tracer) CaptureStart(env *vm.EVM, from common.Address, to common.Address, create bool, input []byte, gas uint64, value *big.Int) {
 	jst.ctx["type"] = "CALL"
 	if create {
 		jst.ctx["type"] = "CREATE"
@@ -528,33 +528,32 @@ func (jst *Tracer) CaptureStart(env *vm.EVM, from common.Address, to common.Addr
 	jst.ctx["gas"] = gas
 	jst.ctx["value"] = value
 
-	return nil
+	jst.dbWrapper.db = env.StateDB
+	jst.ctx["block"] = env.BlockNumber.Uint64()
 }
 
-// CaptureState implements the Tracer interface to trace a single step of VM execution.
-func (jst *Tracer) CaptureState(env *vm.EVM, pc uint64, op vm.OpCode, gas, cost uint64, memory *vm.Memory, stack *vm.Stack, contract *vm.Contract, rData []byte, depth int, err error) error {
+// CaptureState implements the EVMLogger interface to trace a single step of VM execution.
+func (jst *Tracer) CaptureState(pc uint64, op vm.OpCode, gas, cost uint64, scope *vm.ScopeContext, rData []byte, depth int, err error) {
 	if jst.err == nil {
 		// Initialize the context if it wasn't done yet
 		if !jst.inited {
-			jst.ctx["block"] = env.BlockNumber.Uint64()
 			jst.inited = true
 		}
 		// If tracing was interrupted, set the error and stop
 		if atomic.LoadUint32(&jst.interrupt) > 0 {
 			jst.err = jst.reason
-			return nil
+			return
 		}
 		jst.opWrapper.op = op
-		jst.stackWrapper.stack = stack
-		jst.memoryWrapper.memory = memory
-		jst.contractWrapper.contract = contract
-		jst.dbWrapper.db = env.StateDB
+		jst.stackWrapper.stack = scope.Stack
+		jst.memoryWrapper.memory = scope.Memory
+		jst.contractWrapper.contract = scope.Contract
 
 		*jst.pcValue = uint(pc)
 		*jst.gasValue = uint(gas)
 		*jst.costValue = uint(cost)
 		*jst.depthValue = uint(depth)
-		*jst.refundValue = uint(env.StateDB.GetRefund())
+		*jst.refundValue = 0
 
 		jst.errorValue = nil
 		if err != nil {
@@ -566,12 +565,11 @@ func (jst *Tracer) CaptureState(env *vm.EVM, pc uint64, op vm.OpCode, gas, cost 
 			jst.err = wrapError("step", err)
 		}
 	}
-	return nil
 }
 
-// CaptureFault implements the Tracer interface to trace an execution fault
+// CaptureFault implements the EVMLogger interface to trace an execution fault
 // while running an opcode.
-func (jst *Tracer) CaptureFault(env *vm.EVM, pc uint64, op vm.OpCode, gas, cost uint64, memory *vm.Memory, stack *vm.Stack, contract *vm.Contract, depth int, err error) error {
+func (jst *Tracer) CaptureFault(pc uint64, op vm.OpCode, gas, cost uint64, scope *vm.ScopeContext, depth int, err error) {
 	if jst.err == nil {
 		// Apart from the error, everything matches the previous invocation
 		jst.errorValue = new(string)
@@ -582,11 +580,18 @@ func (jst *Tracer) CaptureFault(env *vm.EVM, pc uint64, op vm.OpCode, gas, cost 
 			jst.err = wrapError("fault", err)
 		}
 	}
-	return nil
+}
+
+// CaptureEnter is called when EVM enters a new scope.
+func (jst *Tracer) CaptureEnter(typ vm.OpCode, from common.Address, to common.Address, input []byte, gas uint64, value *big.Int) {
+}
+
+// CaptureExit is called when EVM exits a scope.
+func (jst *Tracer) CaptureExit(output []byte, gasUsed uint64, err error) {
 }
 
 // CaptureEnd is called after the call finishes to finalize the tracing.
-func (jst *Tracer) CaptureEnd(output []byte, gasUsed uint64, t time.Duration, err error) error {
+func (jst *Tracer) CaptureEnd(output []byte, gasUsed uint64, t time.Duration, err error) {
 	jst.ctx["output"] = output
 	jst.ctx["gasUsed"] = gasUsed
 	jst.ctx["time"] = t.String()
@@ -594,7 +599,6 @@ func (jst *Tracer) CaptureEnd(output []byte, gasUsed uint64, t time.Duration, er
 	if err != nil {
 		jst.ctx["error"] = err.Error()
 	}
-	return nil
 }
 
 // GetResult calls the Javascript 'result' function and returns its value, or any accumulated error

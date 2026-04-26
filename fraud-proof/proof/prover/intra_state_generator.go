@@ -77,7 +77,7 @@ func (l *IntraStateGenerator) CaptureTxStart(gasLimit uint64) {}
 
 func (l *IntraStateGenerator) CaptureTxEnd(restGas uint64) {}
 
-func (l *IntraStateGenerator) CaptureStart(env *vm.EVM, from common.Address, to common.Address, create bool, input []byte, gas uint64, value *big.Int) error {
+func (l *IntraStateGenerator) CaptureStart(env *vm.EVM, from common.Address, to common.Address, create bool, input []byte, gas uint64, value *big.Int) {
 	l.env = env
 	// To be consistent with stepIdx, but not necessary for state generation
 	l.counter = 1
@@ -93,18 +93,18 @@ func (l *IntraStateGenerator) CaptureStart(env *vm.EVM, from common.Address, to 
 	l.startInterState.GlobalState = l.env.StateDB.Copy() // This state includes gas-buying and nonce-increment
 	l.lastDepthState = l.startInterState
 	log.Debug("Capture Start", "from", from, "to", to)
-	return nil
 }
 
 // CaptureState will be called before the opcode execution
 // vmerr is for stack validation and gas validation
 // the execution error is captured in CaptureFault
-func (l *IntraStateGenerator) CaptureState(env *vm.EVM, pc uint64, op vm.OpCode, gas, cost uint64, memory *vm.Memory, stack *vm.Stack, contract *vm.Contract, rData []byte, depth int, vmerr error) error {
+func (l *IntraStateGenerator) CaptureState(pc uint64, op vm.OpCode, gas, cost uint64, scope *vm.ScopeContext, rData []byte, depth int, vmerr error) {
+	memory := scope.Memory
+	stack := scope.Stack
+	contract := scope.Contract
 	if l.done {
-		// Something went wrong during tracing, exit early
-		return nil
+		return
 	}
-	// Construct intra state
 	s := state.StateFromCaptured(
 		l.blockNumber,
 		l.transactionIdx,
@@ -112,7 +112,7 @@ func (l *IntraStateGenerator) CaptureState(env *vm.EVM, pc uint64, op vm.OpCode,
 		l.selfDestructSet,
 		l.blockHashTree,
 		l.accessListTrie,
-		env,
+		l.env,
 		l.lastDepthState,
 		l.callFlag,
 		l.input,
@@ -129,7 +129,6 @@ func (l *IntraStateGenerator) CaptureState(env *vm.EVM, pc uint64, op vm.OpCode,
 	l.lastState = s
 	l.lastCost = cost
 	l.counter += 1
-	return nil
 }
 
 func (l *IntraStateGenerator) CaptureEnter(typ vm.OpCode, from common.Address, to common.Address, input []byte, gas uint64, value *big.Int) {
@@ -189,14 +188,11 @@ func (l *IntraStateGenerator) CaptureExit(output []byte, gasUsed uint64, vmerr e
 // CaptureFault will be called when the stack/gas validation is passed but
 // the execution failed. The current call will immediately be reverted.
 // The error is handled in CaptureExit so nothing to do here.
-func (l *IntraStateGenerator) CaptureFault(env *vm.EVM, pc uint64, op vm.OpCode, gas, cost uint64, memory *vm.Memory, stack *vm.Stack, contract *vm.Contract, depth int, err error) error {
-	return nil
+func (l *IntraStateGenerator) CaptureFault(pc uint64, op vm.OpCode, gas, cost uint64, scope *vm.ScopeContext, depth int, err error) {
 }
 
-func (l *IntraStateGenerator) CaptureEnd(output []byte, gasUsed uint64, t time.Duration, err error) error {
-	// State generation finished, mark it as done
+func (l *IntraStateGenerator) CaptureEnd(output []byte, gasUsed uint64, t time.Duration, err error) {
 	l.done = true
-	return nil
 }
 
 func (l *IntraStateGenerator) GetGeneratedStates() ([]GeneratedIntraState, error) {

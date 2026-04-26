@@ -888,9 +888,17 @@ func opStop(pc *uint64, interpreter *EVMInterpreter, contract *Contract, memory 
 }
 
 func opSuicide(pc *uint64, interpreter *EVMInterpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
+	beneficiary := common.BigToAddress(stack.pop())
 	balance := interpreter.evm.StateDB.GetBalance(contract.Address())
-	interpreter.evm.StateDB.AddBalance(common.BigToAddress(stack.pop()), balance)
 
+	if interpreter.evm.vmConfig.Debug {
+		interpreter.evm.vmConfig.Tracer.CaptureEnter(SELFDESTRUCT, contract.Address(), beneficiary, nil, 0, balance)
+		defer func() {
+			interpreter.evm.vmConfig.Tracer.CaptureExit(nil, 0, nil)
+		}()
+	}
+
+	interpreter.evm.StateDB.AddBalance(beneficiary, balance)
 	interpreter.evm.StateDB.Suicide(contract.Address())
 	if rcfg.UsingBVM && interpreter.evm.chainConfig.IsSDUpdate(interpreter.evm.BlockNumber) {
 		interpreter.evm.StateDB.SubBalance(contract.Address(), balance)

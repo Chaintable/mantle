@@ -288,14 +288,28 @@ func (s *stateObject) updateTrie(db Database) Trie {
 			continue
 		}
 		s.originStorage[key] = value
+		hashKey := crypto.Keccak256Hash(key[:])
 
 		if (value == common.Hash{}) {
 			s.setError(tr.TryDelete(key[:]))
+			if s.db.storageDiff != nil {
+				if s.db.storageDiff.Storage[s.addrHash] == nil {
+					s.db.storageDiff.Storage[s.addrHash] = make(map[common.Hash][]byte)
+				}
+				s.db.storageDiff.Storage[s.addrHash][hashKey] = nil
+			}
 			continue
 		}
 		// Encoding []byte cannot fail, ok to ignore the error.
 		v, _ := rlp.EncodeToBytes(common.TrimLeftZeroes(value[:]))
 		s.setError(tr.TryUpdate(key[:], v))
+
+		if s.db.storageDiff != nil {
+			if s.db.storageDiff.Storage[s.addrHash] == nil {
+				s.db.storageDiff.Storage[s.addrHash] = make(map[common.Hash][]byte)
+			}
+			s.db.storageDiff.Storage[s.addrHash][hashKey] = v
+		}
 	}
 	if len(s.pendingStorage) > 0 {
 		s.pendingStorage = make(Storage)
