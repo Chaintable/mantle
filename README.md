@@ -1,3 +1,30 @@
+# Chaintable Mantle pre-Bedrock node
+
+> Fork of [mantlenetworkio/mantle](https://github.com/mantlenetworkio/mantle), with Chaintable pipeline RPC patches.
+
+## Purpose
+
+This repository builds Mantle's legacy `l2geth` client for historical blocks before the Bedrock upgrade. It is separate from the post-Bedrock [`mantle-writer`](https://github.com/Chaintable/op-geth/tree/mantlev2) image.
+
+## Architecture
+
+The Chaintable patch adds the `trace_debankBlock` JSON-RPC method. For a requested block, the node replays its transactions against the parent state and returns pipeline-compatible block data: the block header, transactions, call traces, receipts, events, and state diff.
+
+This client serves data on request. It does not push block data directly to Kafka or S3.
+
+```text
+Downstream importer
+        │
+        │ trace_debankBlock(block number)
+        ▼
+Mantle pre-Bedrock l2geth (this repository)
+        │ replay against the parent state
+        ▼
+block header · transactions · traces · receipts/events · state diff
+```
+
+---
+
 <div align="center">
 
 <p><img src="./docs/assets/horizontal_logo.svg" width="800"></p>
