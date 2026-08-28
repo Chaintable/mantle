@@ -4,7 +4,7 @@
 
 ## Purpose
 
-This repository builds Mantle's legacy `l2geth` client for historical blocks before the Bedrock upgrade. It is separate from the post-Bedrock [`mantle-writer`](https://github.com/Chaintable/op-geth/tree/mantlev2) image.
+This repository builds Mantle's legacy `l2geth` client for historical blocks before the Bedrock upgrade. Its version and commit-specific tags are published to the [`mantle-writer`](https://gallery.ecr.aws/b2h7a5c4/chaintable/mantle-writer) image repository. Post-Bedrock builds and the `latest` tag are published from the [`mantlev2`](https://github.com/Chaintable/op-geth/tree/mantlev2) branch of `Chaintable/op-geth`; use an explicit tag when running this legacy client.
 
 ## Architecture
 
