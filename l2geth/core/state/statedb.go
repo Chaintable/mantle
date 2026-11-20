@@ -126,6 +126,10 @@ type StateDB struct {
 	// Debank hooks
 	OnLog       LogHook
 	storageDiff *StorageDiff
+	// bvmBalances holds the addresses whose MNT balance was written through the
+	// BVM_MNT storage slot since the last IntermediateRoot (UsingBVM only). Their
+	// account entries in storageDiff are rebuilt from the BVM balance there.
+	bvmBalances map[common.Address]struct{}
 
 	// Measurements gathered during execution for debugging purposes
 	AccountReads   time.Duration
@@ -158,6 +162,7 @@ func New(root common.Hash, db Database) (*StateDB, error) {
 			Accounts: make(map[common.Hash][]byte),
 			Storage:  make(map[common.Hash]map[common.Hash][]byte),
 		},
+		bvmBalances: make(map[common.Address]struct{}),
 	}, nil
 }
 
@@ -408,6 +413,7 @@ func (s *StateDB) AddBalance(addr common.Address, amount *big.Int) {
 		bal := value.Big()
 		bal = bal.Add(bal, amount)
 		s.SetState(dump.BvmMantleAddress, key, common.BigToHash(bal))
+		s.trackBvmBalance(addr)
 	} else {
 		stateObject := s.GetOrNewStateObject(addr)
 		if stateObject != nil {
@@ -428,6 +434,7 @@ func (s *StateDB) SubBalance(addr common.Address, amount *big.Int) {
 		bal := value.Big()
 		bal = bal.Sub(bal, amount)
 		s.SetState(dump.BvmMantleAddress, key, common.BigToHash(bal))
+		s.trackBvmBalance(addr)
 	} else {
 		stateObject := s.GetOrNewStateObject(addr)
 		if stateObject != nil {
@@ -441,6 +448,7 @@ func (s *StateDB) SetBalance(addr common.Address, amount *big.Int) {
 		// Mutate the storage slot inside of bvm_ETH to change balances.
 		key := GetbvmBalanceKey(addr)
 		s.SetState(dump.BvmMantleAddress, key, common.BigToHash(amount))
+		s.trackBvmBalance(addr)
 	} else {
 		stateObject := s.GetOrNewStateObject(addr)
 		if stateObject != nil {
@@ -520,9 +528,15 @@ func (s *StateDB) updateStateObject(obj *stateObject) {
 	s.setError(s.trie.TryUpdate(addr[:], data))
 
 	if s.storageDiff != nil {
+		balance := obj.data.Balance
+		if rcfg.UsingBVM {
+			// The account trie does not hold MNT balances under BVM; they live in
+			// the BVM_MNT storage slot, which is what GetBalance reads.
+			balance = s.GetBalance(addr)
+		}
 		slimData, err := rlp.EncodeToBytes(slimAccount{
 			Nonce:    obj.data.Nonce,
-			Balance:  obj.data.Balance,
+			Balance:  balance,
 			Root:     obj.data.Root,
 			CodeHash: obj.data.CodeHash,
 		})
@@ -775,6 +789,11 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 			if s.storageDiff != nil {
 				delete(s.storageDiff.Accounts, obj.addrHash)
 				delete(s.storageDiff.Storage, obj.addrHash)
+				if s.keepsBvmBalance(obj) {
+					// Empty in the trie but still holding MNT: report the balance
+					// instead of a deletion.
+					s.trackBvmBalance(addr)
+				}
 			}
 		} else {
 			obj.finalise()
@@ -805,11 +824,62 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	if len(s.stateObjectsPending) > 0 {
 		s.stateObjectsPending = make(map[common.Address]struct{})
 	}
+	s.updateBvmBalances()
 	// Track the amount of time wasted on hashing the account trie
 	if metrics.EnabledExpensive {
 		defer func(start time.Time) { s.AccountHashes += time.Since(start) }(time.Now())
 	}
 	return s.trie.Hash()
+}
+
+// trackBvmBalance records an MNT balance write made through the BVM_MNT slot.
+func (s *StateDB) trackBvmBalance(addr common.Address) {
+	if s.storageDiff == nil {
+		return
+	}
+	if s.bvmBalances == nil {
+		s.bvmBalances = make(map[common.Address]struct{})
+	}
+	s.bvmBalances[addr] = struct{}{}
+}
+
+// keepsBvmBalance reports whether a deleted object should stay in the state diff
+// as an account holding MNT rather than as a deletion: under BVM an account that is
+// empty in the trie can still hold a balance in the BVM_MNT slot. Self-destructed
+// accounts are always deletions.
+func (s *StateDB) keepsBvmBalance(obj *stateObject) bool {
+	return rcfg.UsingBVM && !obj.suicided && s.GetBalance(obj.address).Sign() != 0
+}
+
+// updateBvmBalances writes an account entry with the BVM balance for every address
+// whose MNT balance was written since the last call. Under BVM, AddBalance and
+// SubBalance only change the BVM_MNT storage slot, so without this the state diff
+// would carry no account change for them (or a zero balance from the trie).
+func (s *StateDB) updateBvmBalances() {
+	if s.storageDiff == nil || len(s.bvmBalances) == 0 {
+		return
+	}
+	for addr := range s.bvmBalances {
+		account := slimAccount{
+			Balance:  s.GetBalance(addr),
+			Root:     emptyRoot,
+			CodeHash: emptyCodeHash,
+		}
+		// getStateObject loads accounts this block has not touched yet, such as
+		// the fee wallet, and returns nil for missing or deleted ones.
+		if obj := s.getStateObject(addr); obj != nil {
+			account.Nonce = obj.data.Nonce
+			account.Root = obj.data.Root
+			account.CodeHash = obj.data.CodeHash
+		} else if obj := s.stateObjects[addr]; obj != nil && !s.keepsBvmBalance(obj) {
+			// Deleted in this block (self-destructed, or empty with no MNT left).
+			continue
+		}
+		if data, err := rlp.EncodeToBytes(account); err == nil {
+			s.storageDiff.Accounts[crypto.Keccak256Hash(addr[:])] = data
+		}
+	}
+	s.bvmBalances = make(map[common.Address]struct{})
 }
 
 // Output returns the state diff collected during block execution.
@@ -820,7 +890,9 @@ func (s *StateDB) Output() (map[common.Hash]struct{}, map[common.Hash][]byte, ma
 	for addr := range s.stateObjectsDirty {
 		if obj := s.stateObjects[addr]; obj != nil {
 			if obj.deleted {
-				destructs[obj.addrHash] = struct{}{}
+				if !s.keepsBvmBalance(obj) {
+					destructs[obj.addrHash] = struct{}{}
+				}
 			} else if obj.code != nil && obj.dirtyCode {
 				codes[common.BytesToHash(obj.CodeHash())] = obj.code
 			}
