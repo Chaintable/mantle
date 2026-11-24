@@ -12,7 +12,7 @@ replace github.com/mantlenetworkio/mantle/metrics => ../metrics
 
 require (
 	github.com/Azure/azure-storage-blob-go v0.7.0
-	github.com/Chaintable/pipeline v0.0.64-0.20260426081657-eef3315ab970
+	github.com/Chaintable/pipeline v0.0.64-0.20261120025717-867c35ce410e
 	github.com/VictoriaMetrics/fastcache v1.12.2
 	github.com/aristanetworks/goarista v0.0.0-20170210015632-ea17b1a17847
 	github.com/aws/aws-sdk-go v1.42.6

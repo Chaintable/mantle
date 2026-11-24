@@ -48,6 +48,8 @@ github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03
 github.com/BurntSushi/xgb v0.0.0-20160522181843-27f122750802/go.mod h1:IVnqGOEym/WlBOVXweHU+Q+/VP0lqqI8lqeDx9IjBqo=
 github.com/Chaintable/pipeline v0.0.64-0.20260426081657-eef3315ab970 h1:m/c9Q9czudbV0eL9OCCei7uXxHfOhGankkN3BD2c/QE=
 github.com/Chaintable/pipeline v0.0.64-0.20260426081657-eef3315ab970/go.mod h1:0G9PCGL0GMtRv5WQ0Eq57PQxD/+jY1/Q3L5FqwSuHtU=
+github.com/Chaintable/pipeline v0.0.64-0.20261120025717-867c35ce410e h1:JACucCsK7/iDWMoh8XVj8v93Y/iRD8xDCbF1yeS9Rv4=
+github.com/Chaintable/pipeline v0.0.64-0.20261120025717-867c35ce410e/go.mod h1:0G9PCGL0GMtRv5WQ0Eq57PQxD/+jY1/Q3L5FqwSuHtU=
 github.com/CloudyKit/fastprinter v0.0.0-20200109182630-33d98a066a53/go.mod h1:+3IMCy2vIlbG1XG/0ggNQv0SvxCAIpPM5b1nCz56Xno=
 github.com/CloudyKit/jet/v3 v3.0.0/go.mod h1:HKQPgSJmdK8hdoAbKUUWajkHyHo4RaU5rMdUywE7VMo=
 github.com/DATA-DOG/go-sqlmock v1.3.3/go.mod h1:f/Ixk793poVmq4qj/V1dPUg2JEAKC73Q5eFN3EC/SaM=
